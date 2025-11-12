@@ -1,0 +1,11 @@
+num_sms: 148
+sm_clk_mhz: 1300
+dram_clk_mhz: 4000
+dram_bus_width: 8192
+mma_flops: # flops are per sm per clk, based on spec'd tput at max clocks
+  fp32: 4096
+  fp16: 8192
+  fp8: 16384
+  fp4: 32768
+
+

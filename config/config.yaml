@@ -1,0 +1,10 @@
+defaults:
+- gpu: b200
+
+model: SOLModel
+
+model_opts:
+  fixed_overhead_cycles: 8000
+  epilogue_min_latency: 2000
+  
+  
