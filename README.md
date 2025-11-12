@@ -1,7 +1,8 @@
 A simple model that estimates the performance of warp-specialized persistent GEMMs on GPUs. The model includes some analytical components as well as some empirical factors that could be tuned to different hardware or implementations by measuring real performance on silicon.
 
 Also included is a script to collect some sample data from Cutlass CuTeDSL kernels on B200.
-
+ 
+# Usage
 ## Setup / Quick Start
 
 The project has only been tested on a B200 machine with CUDA TK 13.0 and CUDA driver major version 580
@@ -48,19 +49,19 @@ uv run predict_gemm.py +input_csv=results/dsv3_nvfp4.csv +output_dir=results/nvf
 
 This will produce an output csv and a bar plot
 
-## Implemented GEMM Models
+# Implemented GEMM Models
 
-### SOL Model
+## SOL Model
 
 The SOL represents the "speed of light" performance based on the hardware peak math and dram throughputs. The runtime is computed as:
 
 ```math
-runtime = \max(\mathrm{math}, \mathrm{DRAM})
+\mathrm{runtime} = \max(\mathrm{math}, \mathrm{DRAM})
 ```
 where $\mathrm{math}$ is the SOL time to do $2 \cdot M \cdot N \cdot K$ ops, and $\mathrm{DRAM}$ is the SOL time to read A and B, and write C.
 
 
-### WSPersistentGEMM Model
+## WSPersistentGEMM Model
 
 The WSPersistentGEMM model represents the kernel as a sequence of phases, where each phase consists of overlapping workloads corresponding to the specialized task of each warp. At steady-state, the "mainloop" consists of overlapping DMA (memory read), Math (MMA), and Epilogue (SIMT and memory write) workloads.
 
@@ -74,7 +75,7 @@ Though not represented in the image, this model also considers the pipelining of
 This model computes the runtime as:
 
 ```math
-runtime = \mathrm{launch overhead} + \mathrm{first DMA} + \mathrm{mainloop} + \mathrm{last wave epilogue}
+\mathrm{runtime} = \mathrm{launch overhead} + \mathrm{first DMA} + \mathrm{mainloop} + \mathrm{last wave epilogue}
 ```
 where $\mathrm{mainloop}$ is $\max(\mathrm{DMA}, \mathrm{Math}, \mathrm{epilogue})$ for each wave.
 
@@ -83,7 +84,7 @@ The epilogue is modeled as a constant overhead combined with the time to write t
 The DMA workload for each SM is modeled as the total load bytes (including both the input tile and scale factors for block-scaled inputs) divided by the cluster size in the multicast dimension for each input tensor (n for A, and m for B). 
 For simplicity, in/out layouts and related kernel functionality are not considered.
 
-## Results
+# Results
 
 
 
