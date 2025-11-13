@@ -44,7 +44,7 @@ Model configuration defaults can be found in `config/`
 ## Get Model Predictions
 
 ```
-uv run predict_gemm.py +input_csv=results/dsv3_nvfp4.csv +output_dir=results/nvfp4/
+uv run predict_gemm.py +input_csv=results/dsv3_nvfp4.csv +output_dir=results/nvfp4/ model=WSPersistentGEMMModel
 ```
 
 This will produce an output csv and a bar plot
@@ -58,33 +58,57 @@ The SOL represents the "speed of light" performance based on the hardware peak m
 ```math
 \mathrm{runtime} = \max(\mathrm{math}, \mathrm{DRAM})
 ```
-where $\mathrm{math}$ is the SOL time to do $2 \cdot M \cdot N \cdot K$ ops, and $\mathrm{DRAM}$ is the SOL time to read A and B, and write C.
+where $\mathrm{math}$ is the SOL time to do $2 \cdot M \cdot N \cdot K$ ops, and $\mathrm{DRAM}$ is the SOL time to both read A and B and write C.
 
 
 ## WSPersistentGEMM Model
 
-The WSPersistentGEMM model represents the kernel as a sequence of phases, where each phase consists of overlapping workloads corresponding to the specialized task of each warp. At steady-state, the "mainloop" consists of overlapping DMA (memory read), Math (MMA), and Epilogue (SIMT and memory write) workloads.
+The WSPersistentGEMM (Warp Specialized Persistent GEMM) model represents the kernel as a sequence of phases, where each phase consists of overlapping workloads each corresponding to the 'specialized' task of each warp. At steady-state, the "mainloop" consists of overlapping DMA (memory read), Math (MMA), and Epilogue (SIMT and memory write) workloads.
 
-Because the workload for each output tile is the same, all mainloop iterations will have the same limiter. The prologue consists of any launch latency as well as the time to complete the load the first input tiles. Note that on the last wave, the epilogue will always be exposed.
+Because the workload for each output tile is the same, all mainloop iterations will have the same limiter. The prologue consists of any launch latency as well as the time to complete the load of the first input tiles. Note that on the last wave, the epilogue will always be exposed.
 
 ![Blackwell Persistent Warp-Specialized GEMM Design: view from a single CTA for 4 waves
 ](img/blackwell_gemm.png)
 
-Though not represented in the image, this model also considers the pipelining of the K-loop; that is, the pipelining of loads and MMAs along the inner (K-dimension), or the inner loop of the GEMM.
+This model does not consider the pipelining of the K-loop; that is, the pipelining of loads and MMAs along the inner (K-dimension), or the inner loop of the GEMM. It simply considers the entire K-dimesion grouped together. This will definitely have an impact on accuracy, but modeling the inner loop would also require detailed consideration of L2 cache, which hasn't been modeled here.
 
 This model computes the runtime as:
 
 ```math
-\mathrm{runtime} = \mathrm{launch overhead} + \mathrm{first DMA} + \mathrm{mainloop} + \mathrm{last wave epilogue}
+\mathrm{runtime} = \mathrm{launch\_overhead} + \mathrm{first\_DMA} + \mathrm{mainloop} + \mathrm{last\_wave\_epilogue}
 ```
-where $\mathrm{mainloop}$ is $\max(\mathrm{DMA}, \mathrm{Math}, \mathrm{epilogue})$ for each wave.
+where $\mathrm{mainloop}$ is $\max(\mathrm{DMA}, \mathrm{Math}, \mathrm{epilogue})$ for each wave. The last wave can be a partial wave where all SMs are not in use, in which case the math time will be the same but the total read BW utilization might be reduced comparead to full waves. This effect is typically referred to as wave-quantization and is implicitly modeled here.
 
 The epilogue is modeled as a constant overhead combined with the time to write the output.
 
 The DMA workload for each SM is modeled as the total load bytes (including both the input tile and scale factors for block-scaled inputs) divided by the cluster size in the multicast dimension for each input tensor (n for A, and m for B). 
 For simplicity, in/out layouts and related kernel functionality are not considered.
 
+Currently, the model does not consider the assignment of CTAs to output tiles ("rasterization") or the corresponding reuse of input tiles in L2 cache. This means that GEMMs with DMA-bound mainloops show a large gap, with the model over-estimating the total DRAM traffic, resulting in an overly pessimistic runtime prediction.
+
 # Results
 
+Here, the measured performance of CuTeDSL kernels is compared with perf model predictions for NVFP4, FP8, and FP16 on B200.
+The clocks are locked to 1.3GHz, which should be low enough to ensure no thermal throttling occurs and the clock is constant for the duration of the kernel.
 
+First, let's take a look at the kernel performance vs. SOL for nvfp4 (e2m1), fp8, and fp16. The title of each chart displays types as {in_dtype}\_{out_dtype}
 
+![NVFP4 Kernel Performance vs. SOL
+](results/nvfp4/scurve_SOLModel.png)
+
+![FP8 Kernel Performance vs. SOL
+](results/fp8/scurve_SOLModel.png)
+
+![FP16 Kernel Performance vs. SOL
+](results/fp16/scurve_SOLModel.png)
+
+As you can see, these kernels mostly don't come close to SOL, and the charts don't make the model feel very useful to predict kernel runtime. Math on Blackwell is very fast, and there must be a lot of math per wave to get close to SOL for math-bound shapes. For memory-bound shapes, latencies and other fixed overheads will dominate and prevent 100% DRAM utilization, especially for these tests which ran with relatively large or poorly chosen tile shapes.
+
+// TODO:
+// WSPersistentGEMMModel results here
+// Comment on results
+// Investigate a few bad results
+
+// Comment on high end due to lack of l2 model
+Due to time constraints, rather than model raster order and L2 cache directly, a knob was added to represent the global L2 hit rate across all reads. Here are the results with L2 hit rate fixed at 40%:
+// WSPersistentGEMMModel with L2 Hit

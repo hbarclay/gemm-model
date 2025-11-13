@@ -5,6 +5,7 @@ model: SOLModel
 
 model_opts:
   fixed_overhead_cycles: 8000
-  epilogue_min_latency: 2000
+  epilogue_min_latency: 1000
+  l2_hit_rate: 0.0
   
   

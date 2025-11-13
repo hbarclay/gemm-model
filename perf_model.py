@@ -82,7 +82,7 @@ class WSPersistentGEMMModel(PerfModel):
       b_sf = cta_n * (mma_k / sf_vec_size) * dtype_bytes.get(sf_dtype, 0)
     total_bytes = sms * (((a_tile+a_sf)/cluster_n) + ((b_tile+b_sf)/cluster_m))
 
-    return total_bytes / self._dram_sol()
+    return (total_bytes * (1 - self.cfg.l2_hit_rate)) / self._dram_sol()
 
   def _ep_adjustment(self):
     if self.cfg.epilogue_min_latency:

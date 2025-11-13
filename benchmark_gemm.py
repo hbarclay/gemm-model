@@ -31,7 +31,6 @@ CTA_SHAPES_BS = [
 CGA_SHAPES =  [
   (2,1),
   (2,2),
-  (2,4),
 ]
 
 def parse_args():
