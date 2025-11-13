@@ -58,16 +58,20 @@ def main(cfg: DictConfig) -> None:
   for res in sorted_results[:5]:
     model.print_summary(res)
 
-  output_csv_path = os.path.join(cfg.output_dir, f'predictions_{cfg.model}.csv')
+  extra_title = f"(L2_hit_rate={cfg.model_opts.l2_hit_rate})" if cfg.model_opts.l2_hit_rate > 0.0 else ""
+  outfile = f'{cfg.model}_l2hit' if extra_title else f'predictions_{cfg.model}.csv'
+
+  output_csv_path = os.path.join(cfg.output_dir, f'predictions_{outfile}.csv')
   pd.DataFrame(results).to_csv(output_csv_path, index=False)
+
 
   plt.figure(figsize=(10, 6))
   plt.bar(range(len(ratios)), ratios, color='blue')
   plt.xlabel('GEMM Problem')
   plt.ylabel('Predicted Runtime / Runtime ')
-  plt.title(f'Perf Ratio vs. {cfg.model}, {results[0]['in_dtype']}_{results[0]['out_dtype']}')
+  plt.title(f'Perf Ratio vs. {cfg.model}, {results[0]['in_dtype']}_{results[0]['out_dtype']} {extra_title}')
   plt.grid(True)
-  plot_path = os.path.join(cfg.output_dir, f'scurve_{cfg.model}.png')
+  plot_path = os.path.join(cfg.output_dir, f'scurve_{outfile}.png')
   plt.savefig(plot_path)
   plt.close()
 

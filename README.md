@@ -65,19 +65,19 @@ where $\mathrm{math}$ is the SOL time to do $2 \cdot M \cdot N \cdot K$ ops, and
 
 The WSPersistentGEMM (Warp Specialized Persistent GEMM) model represents the kernel as a sequence of phases, where each phase consists of overlapping workloads each corresponding to the 'specialized' task of each warp. At steady-state, the "mainloop" consists of overlapping DMA (memory read), Math (MMA), and Epilogue (SIMT and memory write) workloads.
 
-Because the workload for each output tile is the same, all mainloop iterations will have the same limiter. The prologue consists of any launch latency as well as the time to complete the load of the first input tiles. Note that on the last wave, the epilogue will always be exposed.
+Because the workload for each output tile is the same, all mainloop iterations will have the same limiter. The prologue consists of any launch latency, some setup time, and the time to complete the load of the first input tiles. Note that on the last wave, the epilogue will always be exposed.
 
 ![Blackwell Persistent Warp-Specialized GEMM Design: view from a single CTA for 4 waves
 ](img/blackwell_gemm.png)
 
-This model does not consider the pipelining of the K-loop; that is, the pipelining of loads and MMAs along the inner (K-dimension), or the inner loop of the GEMM. It simply considers the entire K-dimesion grouped together. This will definitely have an impact on accuracy, but modeling the inner loop would also require detailed consideration of L2 cache, which hasn't been modeled here.
+This model does not consider the pipelining of the K-loop; that is, the pipelining of loads and MMAs along the inner (K-dimension), or the inner loop of the GEMM. It simply considers the entire K-dimesion grouped together. 
 
 This model computes the runtime as:
 
 ```math
-\mathrm{runtime} = \mathrm{launch\_overhead} + \mathrm{first\_DMA} + \mathrm{mainloop} + \mathrm{last\_wave\_epilogue}
+\mathrm{runtime} = \mathrm{setup\_overhead} + \mathrm{first\_DMA} + \mathrm{mainloop} + \mathrm{last\_wave\_epilogue}
 ```
-where $\mathrm{mainloop}$ is $\max(\mathrm{DMA}, \mathrm{Math}, \mathrm{epilogue})$ for each wave. The last wave can be a partial wave where all SMs are not in use, in which case the math time will be the same but the total read BW utilization might be reduced comparead to full waves. This effect is typically referred to as wave-quantization and is implicitly modeled here.
+where $\mathrm{mainloop}$ is $\max(\mathrm{DMA}, \mathrm{Math}, \mathrm{epilogue})$ for each wave. The last wave can be a partial wave where all SMs are not in use, in which case the math time will be the same but the total read BW utilization might be reduced compared to full waves. This effect is typically referred to as wave-quantization and is implicitly modeled here.
 
 The epilogue is modeled as a constant overhead combined with the time to write the output.
 
@@ -102,13 +102,83 @@ First, let's take a look at the kernel performance vs. SOL for nvfp4 (e2m1), fp8
 ![FP16 Kernel Performance vs. SOL
 ](results/fp16/scurve_SOLModel.png)
 
-As you can see, these kernels mostly don't come close to SOL, and the charts don't make the model feel very useful to predict kernel runtime. Math on Blackwell is very fast, and there must be a lot of math per wave to get close to SOL for math-bound shapes. For memory-bound shapes, latencies and other fixed overheads will dominate and prevent 100% DRAM utilization, especially for these tests which ran with relatively large or poorly chosen tile shapes.
+As you can see, these kernels mostly don't come close to SOL, and the charts don't make the model feel very useful to predict kernel runtime. Math on Blackwell is very fast, so there must be a lot of math per wave to get close to SOL for math-bound shapes. For memory-bound shapes, latencies and other fixed overheads will dominate and prevent 100% DRAM utilization, especially for these tests which ran with relatively large or poorly-chosen tile shapes.
 
-// TODO:
-// WSPersistentGEMMModel results here
-// Comment on results
-// Investigate a few bad results
+Now, let's look at some results from the WSPersistentGEMM Model. Again, results are displayed as performance vs. model prediction for nvfp4, fp8, and fp16.
 
-// Comment on high end due to lack of l2 model
-Due to time constraints, rather than model raster order and L2 cache directly, a knob was added to represent the global L2 hit rate across all reads. Here are the results with L2 hit rate fixed at 40%:
-// WSPersistentGEMMModel with L2 Hit
+![NVFP4 Kernel Performance vs. SOL
+](results/nvfp4/scurve_WSPersistentGEMMModel.png)
+
+![FP8 Kernel Performance vs. SOL
+](results/fp8/scurve_WSPersistentGEMMModel.png)
+
+![FP16 Kernel Performance vs. SOL
+](results/fp16/scurve_WSPersistentGEMMModel.png)
+
+Better than just SOL! Now, the perf ratios are centered at 1.0x, and real kernel performance is at most 2x faster or 2x slower than the model prediction. Let's take a look at a case with one of the most pessimistic (highest-ratio, rightmost) predictions for nvfp4:
+```
+MNK 4096 4096 16384
+CTA (128 64)
+CLUSTER (2 1)
+RATIO: 1.6697582628788883
+    predicted: 376.1631394230768
+    actual: 225.27999877929688
+PROLOGUE
+    Overhead: 6.153846153846154
+    DMA: 0.1040625
+MAINLOOP
+    Limiter: DMA
+        DMA: 26.64
+        MATH: 6.3015384615384615
+        EPILOG: 1.3612307692307695
+    Last Wave
+        DMA: 22.32
+        MATH: 6.3015384615384615
+        EPILOG: 1.2652307692307694
+```
+
+A DMA-bound kernel, where the model over-estimates the global load bytes. All the other most pessimistic cases are similar. This issue is present because the model does not model the assignment of CTAs to output tiles and the corresponding reuse of input tiles in the L2 cache when counting global loads. Due to time constraints, rather than model raster order and L2 cache directly, a knob was added to represent the global L2 hit rate across all reads. This change is almost certainly too heavy-handed, and a slightly more sophisticated L2 model could probably offer a lot better accuracy. Here are the results with L2 hit rate fixed at 0.4:
+
+![NVFP4 Kernel Performance vs. SOL
+](results/nvfp4/scurve_WSPersistentGEMMModel_l2hit.png)
+
+![FP8 Kernel Performance vs. SOL
+](results/fp8/scurve_WSPersistentGEMMModel_l2hit.png)
+
+![FP16 Kernel Performance vs. SOL
+](results/fp16/scurve_WSPersistentGEMMModel_l2hit.png)
+
+The change indeed reduced the gap for the most pessimistic cases. The change will not affect the predictions for math- or epilogue-bound cases. Now, the largest ratio is 1.2x for fp16 and fp8.
+
+Now, let's take a look at the lowest-ratio (leftmost) case from fp8:
+```
+MNK 4096 7168 257
+CTA (64 256)
+CLUSTER (2 1)
+RATIO: 0.5794853639180193
+    predicted: 20.65007692307692
+    actual: 35.63520014286041
+PROLOGUE
+    Overhead: 6.153846153846154
+    DMA: 0.111
+MAINLOOP
+    Limiter: EPILOG
+        DMA: 0.89146875
+        MATH: 0.3953846153846154
+        EPILOG: 1.0652307692307692
+    Last Wave
+        DMA: 0.096375
+        MATH: 0.3953846153846154
+        EPILOG: 0.8012307692307692
+```
+
+The K dimension is very small, so this kernel is epilogue-bound. Indeed, checking more of the low-ratio cases indicates the model poorly predicts epilogue-bound performance. Since the epilogue model used here is very simple (just a constant), it is expected that we achieve low accuracy for epilogue-bound shapes. One option would be to tune the estimated constant factor in the epilogue latency by collecting some empirical data. Another would be to model the epilogue in more detail by better reflecting the real kernel implementation.
+
+
+# Conclusion
+
+The model presented here is a very simple representation of the perf-relevant structure of warp-specialized GEMM kernels, tested for B200 on several data types. It is a signficant improvement over a naive SOL model for predicting the performance of GEMM kernels of arbitrary shapes, improving from roughly 40-50% average ratio for the naive SOL model to around 80% for the custom model, with a much better worst-case ratio. The model as-written should be easily portable to different hardware (i.e. Hopper or RTX Blackwell) and extensible to other algorithms (i.e. implicit_gemm or GEMM+X). With additional details about the hardware and software, the model accuracy can be improved. Based on the results, the following additions would improve the accuracy for the worst-predicted cases:
+- L2 cache
+- CTA raterization
+- More detailed epilogue model
+- SM-level limiter, with empirical data about the throughput of different HW units (i.e. can a specific tile size be bound on L2 or SMEM?)
